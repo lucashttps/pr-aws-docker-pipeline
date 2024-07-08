@@ -1,0 +1,66 @@
+name: Docker image pipeline
+
+on:
+  pull_request:
+    types:
+      - opened
+      - merged
+      - closed
+jobs:
+   opened:
+    if: github.event.action != 'closed' && github.event.pull_request.merged == false && startsWith(github.head_ref, 'release/')
+    name: Create docker image from merge
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+    permissions: write-all
+    steps:
+    - name: Aws Login
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GT_TOKEN }}
+          aws-region: ${{secrets.AWS_REGION}}
+          role-duration-seconds: 1200
+          role-session-name: AwsGitHubSession
+    - run: aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin ${{secrets.DOCKER_URL_SIMPLE}}
+    - name: Pr is opened
+      uses: actions/checkout@v3
+    - name: Build, tag, and push image to Amazon ECR
+      run: |
+        docker build -t ${{secrets.DOCKER_NAME}} .
+        docker tag ${{secrets.TAG_NAME}}:latest ${{secrets.DOCKER_URL_AWS}}/${{secrets.DOCKER_NAME}}:${{github.event.number}}
+        docker push ${{secrets.DOCKER_URL_AWS}}/${{secrets.DOCKER_NAME}}:${{github.event.number}}
+    - name: Comment PR
+      uses: thollander/actions-comment-pull-request@v1
+      with:
+          message: :white_check_mark::hammer:IMAGEM DOCKER CRIADA:hammer::white_check_mark:<br><br>Para baixar a imagem do docker digite o seguinte comando no seu terminal:<br><br>`docker pull ${{secrets.DOCKER_URL_AWS}}/${{secrets.DOCKER_NAME}}:${{github.event.number}}`
+   closed:
+    if: github.event.action == 'closed' && startsWith(github.head_ref, 'release/')
+    name: Delete docker image when closed
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+    permissions: write-all
+    steps:
+    - name: Aws Login
+      if: startsWith(github.head_ref, 'release/')
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          role-duration-seconds: 1200
+          role-session-name: AwsGitHubSession
+    - run: aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin ${{secrets.DOCKER_URL_SIMPLE}}
+    - name: Pr is Closed
+      uses: actions/checkout@v3
+    - name: Build, tag, and push image to Amazon ECR
+      run: aws ecr batch-delete-image --region us-east-2 --repository-name ${{secrets.REPOSITORY_NAME}} --image-ids imageTag=${{github.event.number}}
+    - name: Comment PR
+      uses: thollander/actions-comment-pull-request@v1
+      with:
+          message: :triangular_flag_on_post::heavy_minus_sign:IMAGEM DOCKER EXCLUIDA
